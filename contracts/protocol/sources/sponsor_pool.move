@@ -1,12 +1,10 @@
+#[allow(unused_const)]
 module protocol::sponsor_pool;
 
-use protocol::config;
-use protocol::constants::{acc_precision, bps};
-use protocol::position::{Self, PositionManager, Position};
-use std::bool;
+use protocol::position::{Self, PositionManager, Position, PositionInfo};
 use std::string::String;
 use sui::balance::{Self, Balance};
-use sui::coin::{Self, Coin};
+use sui::coin;
 use sui::package;
 use sui::sui::SUI;
 
@@ -58,6 +56,11 @@ fun init(otw: SPONSOR_POOL, ctx: &mut TxContext) {
     transfer::public_transfer(admin_cap, sender);
 }
 
+/// Create a new SponsorPool instance
+/// * `keeper_addr`: The address of the keeper for the sponsor pool.
+/// * `url`: The URL associated with the sponsor pool.
+/// * `index`: The index of the sponsor pool.
+/// * `ctx`: The transaction context used to create the SponsorPool.
 public(package) fun new<RewardCoin>(
     keeper_addr: address,
     url: String,
@@ -79,6 +82,9 @@ public(package) fun new<RewardCoin>(
     pool
 }
 
+/// Open a new position in the sponsor pool
+/// * `pool`: The mutable reference to the SponsorPool.
+/// * `ctx`: The transaction context used to create the position.
 public fun open_position<RewardCoin>(
     pool: &mut SponsorPool<RewardCoin>,
     ctx: &mut TxContext,
@@ -95,6 +101,9 @@ public fun open_position<RewardCoin>(
     position
 }
 
+/// Close a position in the sponsor pool
+/// * `pool`: The mutable reference to the SponsorPool.
+/// * `position`: The Position to be closed.
 public fun close_position<RewardCoin>(pool: &mut SponsorPool<RewardCoin>, position: Position) {
     position::close_position(&mut pool.position_manager, position);
 }
@@ -156,6 +165,7 @@ public fun withdraw_gas<RewardCoin>(
     }
 }
 
+#[allow(lint(self_transfer))]
 public fun unstake<RewardCoin>(
     pool: &mut SponsorPool<RewardCoin>,
     position: &mut Position,
@@ -177,7 +187,7 @@ public fun unstake<RewardCoin>(
     let reward_amount = (pending_reward_scaled / protocol::constants::acc_precision()) as u64;
     if (reward_amount > 0) {
         let reward_coin = coin::take(&mut pool.reward_balance, reward_amount, ctx);
-        sui::transfer::public_transfer(reward_coin, tx_context::sender(ctx));
+        transfer::public_transfer(reward_coin, tx_context::sender(ctx));
     };
 
     pool.total_shares = pool.total_shares - shares_to_remove;
@@ -253,4 +263,51 @@ public fun update_pool_accs<RewardCoin>(
     additional_gas: u128,
 ) {
     update_pool_accs_internal(pool, additional_reward, additional_gas);
+}
+
+/// Add SUI balance to pool
+public(package) fun add_sui_balance<RewardCoin>(
+    pool: &mut SponsorPool<RewardCoin>,
+    balance: Balance<SUI>,
+) {
+    pool.balance.join(balance);
+}
+
+/// Get position manager reference
+public fun position_manager<RewardCoin>(pool: &SponsorPool<RewardCoin>): &PositionManager {
+    &pool.position_manager
+}
+
+/// Get mutable position manager reference (needed for liquidation)
+public(package) fun position_manager_mut<RewardCoin>(
+    pool: &mut SponsorPool<RewardCoin>,
+): &mut PositionManager {
+    &mut pool.position_manager
+}
+
+public fun acc_reward_per_share<RewardCoin>(pool: &SponsorPool<RewardCoin>): u128 {
+    pool.acc_reward_per_share
+}
+
+public fun acc_gas_per_share<RewardCoin>(pool: &SponsorPool<RewardCoin>): u128 {
+    pool.acc_gas_per_share
+}
+
+public fun get_position_info<RewardCoin>(
+    pool: &SponsorPool<RewardCoin>,
+    position_id: ID,
+): &PositionInfo {
+    position::get_position_info(&pool.position_manager, position_id)
+}
+
+public fun total_shares<RewardCoin>(pool: &SponsorPool<RewardCoin>): u128 {
+    pool.total_shares
+}
+
+public fun keeper_addr<RewardCoin>(pool: &SponsorPool<RewardCoin>): address {
+    pool.keeper_addr
+}
+
+public fun index<RewardCoin>(pool: &SponsorPool<RewardCoin>): u64 {
+    pool.index
 }

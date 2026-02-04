@@ -1,3 +1,4 @@
+#[allow(unused_const)]
 module protocol::position;
 
 use std::string::{Self, utf8, String};
@@ -176,6 +177,12 @@ public(package) fun close_position(manager: &mut PositionManager, position: Posi
     destroy(position);
 }
 
+/// Increment shares for a position
+/// * `position`: The Position to update.
+/// * `manager`: The PositionManager managing the position.
+/// * `shares`: The number of shares to increment.
+/// * `current_acc_reward_per_share`: The current accumulated reward per share.
+/// * `current_acc_gas_per_share`: The current accumulated gas per share.
 public(package) fun increment_shares(
     position: &mut Position,
     manager: &mut PositionManager,
@@ -198,6 +205,12 @@ public(package) fun increment_shares(
     position.shares = position.shares + shares;
 }
 
+/// Decrement shares for a position
+/// * `position`: The Position to update.
+/// * `manager`: The PositionManager managing the position.
+/// * `shares`: The number of shares to decrement.
+/// * `current_acc_reward_per_share`: The current accumulated reward per share.
+/// * `current_acc_gas_per_share`: The current accumulated gas per share.
 public(package) fun decrement_shares(
     position: &mut Position,
     manager: &mut PositionManager,
@@ -222,6 +235,11 @@ public(package) fun decrement_shares(
     position.shares = position.shares - shares;
 }
 
+/// Harvest pending rewards and gas for a position
+/// * `position`: The Position to harvest from.
+/// * `manager`: The PositionManager managing the position.
+/// * `current_acc_reward_per_share`: The current accumulated reward per share.
+/// * `current_acc_gas_per_share`: The current accumulated gas per share.
 public(package) fun harvest(
     position: &Position,
     manager: &mut PositionManager,
@@ -347,6 +365,26 @@ fun borrow_mut_position_info(manager: &mut PositionManager, position_id: ID): &m
     assert!(position_info.position_id == position_id, EPositionNotFound);
 
     position_info
+}
+
+public fun get_position_info(manager: &PositionManager, position_id: ID): &PositionInfo {
+    assert!(manager.positions.contains(position_id), EPositionNotFound);
+    let position_info = manager.positions.borrow(position_id);
+    assert!(position_info.position_id == position_id, EPositionNotFound);
+
+    position_info
+}
+
+public fun gas_debt_amount(position_info: &PositionInfo): u128 {
+    position_info.gas_debt_amount
+}
+
+public fun reward_debt_amount(position_info: &PositionInfo): u128 {
+    position_info.reward_debt_base_asset_amount
+}
+
+public fun position_info_shares(position_info: &PositionInfo): u128 {
+    position_info.shares
 }
 
 fun remove_position_info_for_restore(manager: &mut PositionManager, position_id: ID) {
