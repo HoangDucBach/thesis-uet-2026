@@ -5,14 +5,14 @@ module protocol::keeper;
 use enclave::enclave::{Self, Enclave};
 use std::string::String;
 use sui::linked_table::{Self, LinkedTable};
-use sui::nitro_attestation::{Self, NitroAttestation};
+use sui::nitro_attestation::{Self, NitroAttestationDocument};
 use sui::package;
 
 // === OTW ===
 public struct KEEPER has drop {}
 
 // === Constants ===
-const STATUS_PENDING_ENCLAVE: u8 = 0;
+const STATUS_PENDING: u8 = 0;
 const STATUS_ACTIVE: u8 = 1;
 const STATUS_SUSPENDED: u8 = 2;
 
@@ -105,10 +105,11 @@ public(package) fun new(ctx: &mut TxContext): KeeperRegistry {
     }
 }
 
-/// Register a new keeper operator
+/// Register a new keeper operator with enclave
 /// * `registry`: The mutable reference to the KeeperRegistry.
 /// * `name`: A human-readable name for the keeper.
 /// * `operator`: The address of the keeper operator.
+/// * `pubkey`: The enclave public key from TEE attestation.
 /// * `pcr0`: The expected PCR0 value for the keeper's enclave.
 /// * `pcr1`: The expected PCR1 value for the keeper's enclave.
 /// * `pcr2`: The expected PCR2 value for the keeper's enclave.
@@ -117,6 +118,7 @@ public(package) fun register_keeper(
     registry: &mut KeeperRegistry,
     name: String,
     operator: address,
+    pubkey: vector<u8>,
     pcr0: vector<u8>,
     pcr1: vector<u8>,
     pcr2: vector<u8>,
@@ -126,14 +128,14 @@ public(package) fun register_keeper(
         id: object::new(ctx),
         operator,
         enclave: enclave::new(
-            vector::empty<u8>(),
+            pubkey, // Use actual pubkey instead of empty
             pcr0,
             pcr1,
             pcr2,
             ctx,
         ),
         name,
-        status: STATUS_PENDING_ENCLAVE,
+        status: STATUS_ACTIVE, // Start as active if pubkey provided
         stats: Stats {
             total_liquidations: 0,
             successful_liquidations: 0,
@@ -149,11 +151,12 @@ public(package) fun register_keeper(
     let keeper_info = KeeperInfo {
         keeper_id,
         operator,
-        status: STATUS_PENDING_ENCLAVE,
+        status: STATUS_ACTIVE, // Update to active
     };
 
     registry.keepers.push_back(keeper_id, keeper_info);
     registry.total_keepers = registry.total_keepers + 1;
+    registry.active_keepers = registry.active_keepers + 1; // Increment active count
 
     keeper
 }
@@ -198,29 +201,6 @@ public fun operator(keeper: &Keeper): address {
 
 public fun name(keeper: &Keeper): String {
     keeper.name
-}
-
-/// Register enclave for a keeper (missing critical function)
-/// * `keeper`: The mutable reference to the Keeper.
-/// * `cap`: The KeeperCap required to perform this operation.
-/// * `pubkey`: The enclave public key after TEE attestation.
-/// * `attestation_doc`: The Nitro attestation document.
-public fun register_enclave(
-    keeper: &mut Keeper,
-    cap: &KeeperCap,
-    pubkey: vector<u8>,
-    attestation_doc: &vector<u8>,
-) {
-    assert!(object::id(keeper) == cap.keeper_id, EKeeperCapNotMatch);
-    assert!(keeper.status == STATUS_PENDING_ENCLAVE, EInvalidStatus);
-
-    // Verify attestation document matches expected PCRs
-    let doc = nitro_attestation::parse_document(attestation_doc);
-    let actual_pcrs = doc.to_pcrs();
-    // assert!(actual_pcrs == keeper.enclave.config.pcrs, EInvalidPCRs);
-
-    enclave::update_pubkey(&mut keeper.enclave, pubkey);
-    keeper.status = STATUS_ACTIVE;
 }
 
 /// Suspend keeper (missing critical function)
@@ -294,13 +274,14 @@ public fun verify_liquidation_signature<T: drop>(
     signature: &vector<u8>,
 ): bool {
     assert!(keeper.status == STATUS_ACTIVE, EKeeperNotActive);
-    enclave::verify_signature_from_enclave(
-        &keeper.enclave,
-        intent_scope,
-        timestamp_ms,
-        payload,
-        signature,
-    )
+    keeper
+        .enclave
+        .verify_signature(
+            intent_scope,
+            timestamp_ms,
+            payload,
+            signature,
+        )
 }
 
 /// Get keeper by ID from registry (missing critical function)

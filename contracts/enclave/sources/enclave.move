@@ -11,8 +11,9 @@ use fun to_pcrs as NitroAttestationDocument.to_pcrs;
 const INITIAL_VERSION: u64 = 1;
 
 // === Errors ===
-const EInvalidPCRs: u64 = 0;
-const EInvalidSignature: u64 = 1;
+const EInvalidPCRs: u64 = 0000;
+const EInvalidSignature: u64 = 0001;
+const EUnauthorized: u64 = 0002;
 
 /// PCR hash type representing the measurements of a TEE enclave
 /// * `vector<u8>`: Enclave image file (PCR0)
@@ -21,16 +22,32 @@ const EInvalidSignature: u64 = 1;
 public struct Pcrs(vector<u8>, vector<u8>, vector<u8>) has copy, drop, store;
 
 /// Enclave configuration with public key and PCR measurements
-public struct EnclaveConfig has copy, drop, store {
+/// * `id`: The unique identifier of the enclave configuration.
+/// * `pubkey`: The public key of the enclave for signature verification.
+/// * `pcrs`: The PCR measurements of the enclave.
+/// * `version`: The version of the enclave configuration.
+public struct EnclaveConfig has key, store {
+    id: UID,
     pubkey: vector<u8>,
     pcrs: Pcrs,
     version: u64,
 }
 
-public struct Enclave has copy, drop, store {
+/// Enclave struct representing a trusted execution environment
+/// * `id`: The unique identifier of the enclave.
+/// * `pubkey`: The public key of the enclave for signature verification.
+/// * `config`: The configuration of the enclave including PCRs and version.
+/// * `operator`: The address of the operator who owns the enclave.
+public struct Enclave has key, store {
+    id: UID,
     pubkey: vector<u8>,
     config: EnclaveConfig,
     operator: address,
+}
+
+public struct EnclaveCap<phantom T> has key, store {
+    id: UID,
+    enclave_id: ID,
 }
 
 /// Intent message for signing and verification
@@ -52,28 +69,45 @@ public fun new(
     ctx: &mut TxContext,
 ): Enclave {
     let config = EnclaveConfig {
+        id: object::new(ctx),
         pubkey,
         pcrs: Pcrs(pcr0, pcr1, pcr2),
         version: INITIAL_VERSION,
     };
     Enclave {
+        id: object::new(ctx),
         pubkey,
         config,
         operator: ctx.sender(),
     }
 }
 
-/// Update PCRs in the config
+/// Mint an enclave capability, using witness pattern
+/// * `enclave`: The enclave to create the capability for.
+/// * `ctx`: Transaction context.
+public fun mint_cap<T: drop>(enclave: &Enclave, _: T, ctx: &mut TxContext): EnclaveCap<T> {
+    assert!(enclave.operator == ctx.sender(), EInvalidSignature);
+
+    EnclaveCap<T> {
+        id: object::new(ctx),
+        enclave_id: object::id(enclave),
+    }
+}
+
+/// Update PCRs in the config (package access)
 /// * `config`: EnclaveConfig to update
 /// * `pcr0`: New PCR0 value
 /// * `pcr1`: New PCR1 value
 /// * `pcr2`: New PCR2 value
-public(package) fun update_pcrs(
+public fun update_pcrs<T: drop>(
     config: &mut EnclaveConfig,
+    cap: &EnclaveCap<T>,
     pcr0: vector<u8>,
     pcr1: vector<u8>,
     pcr2: vector<u8>,
 ) {
+    assert!(object::id(config) == cap.enclave_id, EUnauthorized);
+
     config.pcrs = Pcrs(pcr0, pcr1, pcr2);
     config.version = config.version + 1;
 }
@@ -98,12 +132,6 @@ public fun create_intent_message<P: drop>(
 
 public fun pubkey(enclave: &Enclave): vector<u8> {
     enclave.pubkey
-}
-
-/// Update enclave public key (missing function for keeper registration)
-public fun update_pubkey(enclave: &mut Enclave, new_pubkey: vector<u8>) {
-    enclave.pubkey = new_pubkey;
-    enclave.config.pubkey = new_pubkey;
 }
 
 /// Verify signature using enclave directly
@@ -136,6 +164,10 @@ public fun pcr2(enclave: &Enclave): vector<u8> {
 
 public fun version(enclave: &Enclave): u64 {
     enclave.config.version
+}
+
+public fun cap_enclave_id<T>(cap: &EnclaveCap<T>): ID {
+    cap.enclave_id
 }
 
 public fun load_pk(config: &EnclaveConfig, document: &NitroAttestationDocument): vector<u8> {

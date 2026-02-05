@@ -48,7 +48,7 @@ public fun initialize_registry(
 ): ProtocolRegistry {
     // Verify caller has admin permission
     config::check_role_admin(config, tx_context::sender(ctx));
-    
+
     let registry = ProtocolRegistry {
         id: object::new(ctx),
         keeper_registry: keeper::new(ctx),
@@ -56,7 +56,7 @@ public fun initialize_registry(
         pools: table::new(ctx),
         config_id: object::id(config),
     };
-    
+
     registry
 }
 
@@ -75,20 +75,20 @@ public fun create_pool<RewardCoin>(
 ): SponsorPool<RewardCoin> {
     // Verify caller has operator permission
     config::check_role_operator(config, tx_context::sender(ctx));
-    
+
     let pool_index = registry.pool_count;
-    
+
     let pool = sponsor_pool::new<RewardCoin>(
         keeper_addr,
         url,
         pool_index,
         ctx,
     );
-    
+
     let pool_id = object::id(&pool);
     registry.pools.add(pool_index, pool_id);
     registry.pool_count = registry.pool_count + 1;
-    
+
     pool
 }
 
@@ -97,6 +97,7 @@ public fun create_pool<RewardCoin>(
 /// * `config`: Reference to global config for ACL check
 /// * `name`: Human-readable keeper name
 /// * `operator`: Keeper operator address
+/// * `pubkey`: Enclave public key from TEE attestation
 /// * `pcr0`, `pcr1`, `pcr2`: Expected PCR values
 /// * `ctx`: Transaction context
 public fun register_keeper(
@@ -104,6 +105,7 @@ public fun register_keeper(
     config: &GlobalConfig,
     name: String,
     operator: address,
+    pubkey: vector<u8>,
     pcr0: vector<u8>,
     pcr1: vector<u8>,
     pcr2: vector<u8>,
@@ -111,17 +113,18 @@ public fun register_keeper(
 ) {
     // Verify caller has admin permission
     config::check_role_admin(config, tx_context::sender(ctx));
-    
+
     let keeper = keeper::register_keeper(
         &mut registry.keeper_registry,
         name,
         operator,
+        pubkey,
         pcr0,
         pcr1,
         pcr2,
         ctx,
     );
-    
+
     // Transfer keeper object to operator
     transfer::public_transfer(keeper, operator);
 }
