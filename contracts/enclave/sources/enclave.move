@@ -88,7 +88,7 @@ public fun create_enclave_config<T: drop>(
     pcr1: vector<u8>,
     pcr2: vector<u8>,
     ctx: &mut TxContext,
-) {
+): EnclaveConfig<T> {
     let enclave_config = EnclaveConfig<T> {
         id: object::new(ctx),
         name,
@@ -97,18 +97,18 @@ public fun create_enclave_config<T: drop>(
         version: INITIAL_VERSION,
     };
 
-    transfer::share_object(enclave_config);
+    enclave_config
 }
 
-/// Register enclave with attestation document.
+/// New enclave with attestation document.
 /// * `enclave_config`: The enclave configuration to register against.
 /// * `document`: The Nitro attestation document containing PCRs and public key.
 /// * `ctx`: Transaction context.
-public fun register_enclave<T>(
+public fun new<T>(
     enclave_config: &EnclaveConfig<T>,
     document: NitroAttestationDocument,
     ctx: &mut TxContext,
-) {
+): Enclave<T> {
     let pubkey = enclave_config.load_pk(&document);
 
     let enclave = Enclave<T> {
@@ -118,7 +118,7 @@ public fun register_enclave<T>(
         owner: ctx.sender(),
     };
 
-    transfer::share_object(enclave);
+    enclave
 }
 
 /// Verify signature using enclave.

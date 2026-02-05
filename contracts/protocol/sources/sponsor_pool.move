@@ -4,7 +4,7 @@ module protocol::sponsor_pool;
 use protocol::position::{Self, PositionManager, Position, PositionInfo};
 use std::string::String;
 use sui::balance::{Self, Balance};
-use sui::coin;
+use sui::coin::{Self, Coin};
 use sui::package;
 use sui::sui::SUI;
 
@@ -16,6 +16,7 @@ public struct SPONSOR_POOL has drop {}
 const EZeroStake: u64 = 2401;
 const EInsufficientStake: u64 = 2402;
 const EPoolPositionMismatch: u64 = 2403;
+const EInsufficientGasBalance: u64 = 2404;
 
 public struct AdminCap has key, store {
     id: UID,
@@ -215,6 +216,19 @@ public fun unstake<RewardCoin>(
     };
 
     principal
+}
+
+/// Take gas from the sponsor pool for keeper
+/// * `pool`: The mutable reference to the SponsorPool.
+/// * `amount`: The amount of gas to take.
+/// * `ctx`: The transaction context used to create the gas coin.
+public(package) fun take_gas<RewardCoin>(
+    pool: &mut SponsorPool<RewardCoin>,
+    amount: u64,
+    ctx: &mut TxContext,
+): Coin<SUI> {
+    assert!(balance::value(&pool.balance) >= amount, EInsufficientGasBalance);
+    coin::take(&mut pool.balance, amount, ctx)
 }
 
 fun stake_internal<RewardCoin>(

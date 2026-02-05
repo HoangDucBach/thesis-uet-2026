@@ -56,7 +56,7 @@ public struct Keeper has key, store {
     id: UID,
     operator: address,
     name: String,
-    enclave: Enclave,
+    enclave_id: ID,
     status: u8,
     stats: Stats,
 }
@@ -118,24 +118,15 @@ public(package) fun register_keeper(
     registry: &mut KeeperRegistry,
     name: String,
     operator: address,
-    pubkey: vector<u8>,
-    pcr0: vector<u8>,
-    pcr1: vector<u8>,
-    pcr2: vector<u8>,
+    enclave_id: ID,
     ctx: &mut TxContext,
 ): Keeper {
     let keeper = Keeper {
         id: object::new(ctx),
         operator,
-        enclave: enclave::new(
-            pubkey, // Use actual pubkey instead of empty
-            pcr0,
-            pcr1,
-            pcr2,
-            ctx,
-        ),
+        enclave_id,
         name,
-        status: STATUS_ACTIVE, // Start as active if pubkey provided
+        status: STATUS_PENDING,
         stats: Stats {
             total_liquidations: 0,
             successful_liquidations: 0,
@@ -171,24 +162,8 @@ public fun update_name(keeper: &mut Keeper, cap: &KeeperCap, new_name: String) {
     keeper.name = new_name;
 }
 
-public fun pcr0(keeper: &Keeper): vector<u8> {
-    keeper.enclave.pcr0()
-}
-
-public fun pcr1(keeper: &Keeper): vector<u8> {
-    keeper.enclave.pcr1()
-}
-
-public fun pcr2(keeper: &Keeper): vector<u8> {
-    keeper.enclave.pcr2()
-}
-
-public fun pubkey(keeper: &Keeper): vector<u8> {
-    keeper.enclave.pubkey()
-}
-
-public fun version(keeper: &Keeper): u64 {
-    keeper.enclave.version()
+public fun enclave_id(keeper: &Keeper): ID {
+    keeper.enclave_id
 }
 
 public fun status(keeper: &Keeper): u8 {
@@ -203,7 +178,7 @@ public fun name(keeper: &Keeper): String {
     keeper.name
 }
 
-/// Suspend keeper (missing critical function)
+/// Suspend keeper
 /// * `registry`: The mutable reference to the KeeperRegistry.
 /// * `keeper_id`: The ID of the keeper to suspend.
 public(package) fun suspend_keeper(registry: &mut KeeperRegistry, keeper: &mut Keeper) {
@@ -219,7 +194,7 @@ public(package) fun suspend_keeper(registry: &mut KeeperRegistry, keeper: &mut K
     };
 }
 
-/// Reactivate keeper (missing critical function)
+/// Reactivate keeper
 /// * `registry`: The mutable reference to the KeeperRegistry.
 /// * `keeper`: The mutable reference to the Keeper.
 public(package) fun reactivate_keeper(registry: &mut KeeperRegistry, keeper: &mut Keeper) {
@@ -233,7 +208,7 @@ public(package) fun reactivate_keeper(registry: &mut KeeperRegistry, keeper: &mu
     registry.active_keepers = registry.active_keepers + 1;
 }
 
-/// Update keeper statistics after liquidation (missing critical function)
+/// Update keeper statistics after liquidation
 /// * `keeper`: The mutable reference to the Keeper.
 /// * `cap`: The KeeperCap required to perform this operation.
 /// * `success`: Whether the liquidation was successful.
@@ -260,31 +235,7 @@ public fun update_stats(
     keeper.stats.last_active_at = timestamp;
 }
 
-/// Verify keeper signature for liquidation (missing critical function)
-/// * `keeper`: The Keeper to verify signature for.
-/// * `intent_scope`: Type of operation (liquidation = 1).
-/// * `timestamp_ms`: Timestamp for replay protection.
-/// * `payload`: The liquidation payload data.
-/// * `signature`: The signature to verify.
-public fun verify_liquidation_signature<T: drop>(
-    keeper: &Keeper,
-    intent_scope: u8,
-    timestamp_ms: u64,
-    payload: T,
-    signature: &vector<u8>,
-): bool {
-    assert!(keeper.status == STATUS_ACTIVE, EKeeperNotActive);
-    keeper
-        .enclave
-        .verify_signature(
-            intent_scope,
-            timestamp_ms,
-            payload,
-            signature,
-        )
-}
-
-/// Get keeper by ID from registry (missing critical function)
+/// Get keeper by ID from registry
 /// * `registry`: The KeeperRegistry to search.
 /// * `keeper_id`: The ID of the keeper to find.
 public fun get_keeper_info(registry: &KeeperRegistry, keeper_id: ID): &KeeperInfo {
@@ -292,18 +243,18 @@ public fun get_keeper_info(registry: &KeeperRegistry, keeper_id: ID): &KeeperInf
     registry.keepers.borrow(keeper_id)
 }
 
-/// Check if keeper is active (missing critical function)
+/// Check if keeper is active
 /// * `keeper`: The Keeper to check.
 public fun is_active(keeper: &Keeper): bool {
     keeper.status == STATUS_ACTIVE
 }
 
-/// Get total keeper count (missing getter)
+/// Get total keeper count
 public fun total_keepers(registry: &KeeperRegistry): u64 {
     registry.total_keepers
 }
 
-/// Get active keeper count (missing getter)
+/// Get active keeper count
 public fun active_keepers(registry: &KeeperRegistry): u64 {
     registry.active_keepers
 }
