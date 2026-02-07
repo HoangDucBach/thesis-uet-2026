@@ -2,14 +2,16 @@
 
 module protocol::keeper;
 
-use enclave::enclave::{Self, Enclave};
+use enclave::enclave::{Self, Enclave, EnclaveCap, EnclaveConfig};
 use std::string::String;
-use sui::linked_table::{Self, LinkedTable};
-use sui::nitro_attestation::{Self, NitroAttestationDocument};
+use sui::nitro_attestation::NitroAttestationDocument;
 use sui::package;
 
 // === OTW ===
 public struct KEEPER has drop {}
+
+// === Witness for Enclave Cap ===
+public struct KeeperWitness has drop {}
 
 // === Constants ===
 const STATUS_PENDING: u8 = 0;
@@ -30,18 +32,6 @@ const EKeeperNotActive: u64 = 3010;
 const EInvalidPCRLength: u64 = 3011;
 const EKeeperCapNotMatch: u64 = 3012;
 
-/// Global registry for all keepers
-/// * `id`: The unique identifier of the keeper registry.
-/// * `keeper_ids`: A linked table mapping operator addresses to Keeper IDs.
-/// * `pcr_configs`: A table of registered PCR configurations.
-/// * `total_keepers`: The total number of registered keepers.
-/// * `active_keepers`: The total number of active keepers.
-public struct KeeperRegistry has store {
-    keepers: LinkedTable<ID, KeeperInfo>,
-    total_keepers: u64,
-    active_keepers: u64,
-}
-
 /// Keeper object representing a registered keeper operator
 /// * `id`: The unique identifier of the keeper.
 /// * `operator`: The address of the keeper operator.
@@ -59,12 +49,6 @@ public struct Keeper has key, store {
     enclave_id: ID,
     status: u8,
     stats: Stats,
-}
-
-public struct KeeperInfo has copy, drop, store {
-    keeper_id: ID,
-    operator: address,
-    status: u8,
 }
 
 /// Keeper performance statistics
@@ -97,31 +81,13 @@ fun init(otw: KEEPER, ctx: &mut TxContext) {
     transfer::public_transfer(publisher, sender);
 }
 
-public(package) fun new(ctx: &mut TxContext): KeeperRegistry {
-    KeeperRegistry {
-        keepers: linked_table::new(ctx),
-        total_keepers: 0,
-        active_keepers: 0,
-    }
-}
-
-/// Register a new keeper operator with enclave
-/// * `registry`: The mutable reference to the KeeperRegistry.
-/// * `name`: A human-readable name for the keeper.
-/// * `operator`: The address of the keeper operator.
-/// * `pubkey`: The enclave public key from TEE attestation.
-/// * `pcr0`: The expected PCR0 value for the keeper's enclave.
-/// * `pcr1`: The expected PCR1 value for the keeper's enclave.
-/// * `pcr2`: The expected PCR2 value for the keeper's enclave.
-/// * `ctx`: The transaction context.
-public(package) fun register_keeper(
-    registry: &mut KeeperRegistry,
+public(package) fun new(
     name: String,
     operator: address,
     enclave_id: ID,
     ctx: &mut TxContext,
 ): Keeper {
-    let keeper = Keeper {
+    Keeper {
         id: object::new(ctx),
         operator,
         enclave_id,
@@ -135,77 +101,50 @@ public(package) fun register_keeper(
             total_gas_used: 0,
             last_active_at: 0,
         },
-    };
-
-    let keeper_id = object::id(&keeper);
-
-    let keeper_info = KeeperInfo {
-        keeper_id,
-        operator,
-        status: STATUS_ACTIVE, // Update to active
-    };
-
-    registry.keepers.push_back(keeper_id, keeper_info);
-    registry.total_keepers = registry.total_keepers + 1;
-    registry.active_keepers = registry.active_keepers + 1; // Increment active count
-
-    keeper
+    }
 }
 
-/// Update keeper's name
-/// * `keeper`: The mutable reference to the Keeper.
-/// * `cap`: The KeeperCap required to perform this operation.
-/// * `new_name`: The new name for the keeper.
-public fun update_name(keeper: &mut Keeper, cap: &KeeperCap, new_name: String) {
-    assert!(object::id(keeper) == cap.keeper_id, EKeeperCapNotMatch);
+/// Utility function to create enclave config, enclave, and capability for keeper
+/// * `name`: A human-readable name for the enclave configuration.
+/// * `pcr0`: The expected PCR0 value for the enclave.
+/// * `pcr1`: The expected PCR1 value for the enclave.
+/// * `pcr2`: The expected PCR2 value for the enclave.
+/// * `document`: The Nitro attestation document.
+/// * `ctx`: Transaction context.
+public fun create_enclave_with_config_and_cap(
+    name: String,
+    pcr0: vector<u8>,
+    pcr1: vector<u8>,
+    pcr2: vector<u8>,
+    document: NitroAttestationDocument,
+    ctx: &mut TxContext,
+): (EnclaveConfig<KeeperWitness>, Enclave<KeeperWitness>, EnclaveCap<KeeperWitness>) {
+    let enclave_cap = enclave::new_cap<KeeperWitness>(KeeperWitness {}, ctx);
+    let enclave_config = enclave::create_enclave_config<KeeperWitness>(
+        &enclave_cap,
+        name,
+        pcr0,
+        pcr1,
+        pcr2,
+        ctx,
+    );
+    let enclave = enclave::new<KeeperWitness>(&enclave_config, document, ctx);
 
-    keeper.name = new_name;
-}
-
-public fun enclave_id(keeper: &Keeper): ID {
-    keeper.enclave_id
-}
-
-public fun status(keeper: &Keeper): u8 {
-    keeper.status
-}
-
-public fun operator(keeper: &Keeper): address {
-    keeper.operator
-}
-
-public fun name(keeper: &Keeper): String {
-    keeper.name
+    (enclave_config, enclave, enclave_cap)
 }
 
 /// Suspend keeper
-/// * `registry`: The mutable reference to the KeeperRegistry.
-/// * `keeper_id`: The ID of the keeper to suspend.
-public(package) fun suspend_keeper(registry: &mut KeeperRegistry, keeper: &mut Keeper) {
+/// * `keeper`: The mutable reference to the Keeper.
+public(package) fun suspend_keeper(keeper: &mut Keeper) {
     assert!(keeper.status == STATUS_ACTIVE, EInvalidStatus);
     keeper.status = STATUS_SUSPENDED;
-
-    let keeper_id = object::id(keeper);
-    let keeper_info = registry.keepers.borrow_mut(keeper_id);
-    keeper_info.status = STATUS_SUSPENDED;
-
-    if (registry.active_keepers > 0) {
-        registry.active_keepers = registry.active_keepers - 1;
-    };
 }
 
 /// Reactivate keeper
-/// * `registry`: The mutable reference to the KeeperRegistry.
 /// * `keeper`: The mutable reference to the Keeper.
-public(package) fun reactivate_keeper(registry: &mut KeeperRegistry, keeper: &mut Keeper) {
+public(package) fun reactivate_keeper(keeper: &mut Keeper) {
     assert!(keeper.status == STATUS_SUSPENDED, EInvalidStatus);
     keeper.status = STATUS_ACTIVE;
-
-    let keeper_id = object::id(keeper);
-    let keeper_info = registry.keepers.borrow_mut(keeper_id);
-    keeper_info.status = STATUS_ACTIVE;
-
-    registry.active_keepers = registry.active_keepers + 1;
 }
 
 /// Update keeper statistics after liquidation
@@ -235,26 +174,36 @@ public fun update_stats(
     keeper.stats.last_active_at = timestamp;
 }
 
-/// Get keeper by ID from registry
-/// * `registry`: The KeeperRegistry to search.
-/// * `keeper_id`: The ID of the keeper to find.
-public fun get_keeper_info(registry: &KeeperRegistry, keeper_id: ID): &KeeperInfo {
-    assert!(registry.keepers.contains(keeper_id), EKeeperNotFound);
-    registry.keepers.borrow(keeper_id)
+/// Update keeper's name
+/// * `keeper`: The mutable reference to the Keeper.
+/// * `cap`: The KeeperCap required to perform this operation.
+/// * `new_name`: The new name for the keeper.
+public fun update_name(keeper: &mut Keeper, cap: &KeeperCap, new_name: String) {
+    assert!(object::id(keeper) == cap.keeper_id, EKeeperCapNotMatch);
+
+    keeper.name = new_name;
+}
+
+// === Getters ===
+
+public fun enclave_id(keeper: &Keeper): ID {
+    keeper.enclave_id
+}
+
+public fun status(keeper: &Keeper): u8 {
+    keeper.status
+}
+
+public fun operator(keeper: &Keeper): address {
+    keeper.operator
+}
+
+public fun name(keeper: &Keeper): String {
+    keeper.name
 }
 
 /// Check if keeper is active
 /// * `keeper`: The Keeper to check.
 public fun is_active(keeper: &Keeper): bool {
     keeper.status == STATUS_ACTIVE
-}
-
-/// Get total keeper count
-public fun total_keepers(registry: &KeeperRegistry): u64 {
-    registry.total_keepers
-}
-
-/// Get active keeper count
-public fun active_keepers(registry: &KeeperRegistry): u64 {
-    registry.active_keepers
 }

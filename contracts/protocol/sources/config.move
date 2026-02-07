@@ -7,9 +7,10 @@ use sui::dynamic_field;
 
 // === Consts ===
 const VERSION: u64 = 1;
-const DEFAULT_PROTOCOL_FEE_RATE_BPS: u64 = 2000;
+const DEFAULT_PROTOCOL_FEE_BPS: u64 = 500; // 5%
 const EMERGENCY_PAUSE_VERSION: u64 = 9223372036854775808; // u64::MAX / 2
-const EMERGENCY_PAUSE_BEFORE_VERSION: vector<u8> = b"emergency_pause_before";
+const EMERGENCY_PAUSE_BEFORE_VERSION: vector<u8> = b"emergency_pausce_before";
+const MAX_KEEPER_FEE_BPS: u64 = 2500; // 25%
 
 // === Roles ===
 const ROLE_ADMIN: u8 = 0; // Full access
@@ -50,7 +51,7 @@ public struct GlobalConfig has key, store {
 fun init(ctx: &mut TxContext) {
     let global_config = GlobalConfig {
         id: object::new(ctx),
-        fee_rate_bps: DEFAULT_PROTOCOL_FEE_RATE_BPS,
+        fee_rate_bps: DEFAULT_PROTOCOL_FEE_BPS,
         acl: acl::new(ctx),
         package_version: VERSION,
     };
@@ -61,18 +62,7 @@ fun init(ctx: &mut TxContext) {
     transfer::share_object(global_config);
 }
 
-/// Updates the protocol fee rate.
-/// * `config`: The mutable reference to the GlobalConfig.
-/// * `new_fee_rate_bps`: The new fee rate in basis points.
-/// * `_admin`: The AdminCap required to perform this operation.
-public fun update_fee_rate(config: &mut GlobalConfig, new_fee_rate_bps: u64, _admin: &AdminCap) {
-    assert!(new_fee_rate_bps as u128 <= bps(), 1001);
-    config.fee_rate_bps = new_fee_rate_bps;
-}
-
-public fun checked_package_version(config: &GlobalConfig) {
-    assert!(config.package_version >= VERSION, EInvalidPackageVersion);
-}
+// === ACL Management ===
 
 /// Set role for member.
 /// * `admin_cap` - The admin cap
@@ -106,6 +96,8 @@ public fun check_role_guardian(config: &GlobalConfig, member: address) {
     assert!(acl::has_role(&config.acl, member, ROLE_GUARDIAN), ENoRoleGuardianPermission);
 }
 
+// === Emergency Operations ===
+
 public fun emergency_pause(config: &mut GlobalConfig, ctx: &mut TxContext) {
     check_role_guardian(config, tx_context::sender(ctx));
 
@@ -138,9 +130,30 @@ public fun emergency_unpause(config: &mut GlobalConfig, new_version: u64, ctx: &
     config.package_version = new_version;
 }
 
+// === Fee Management ===
+
+/// Updates the protocol fee rate.
+/// * `config`: The mutable reference to the GlobalConfig.
+/// * `new_fee_rate_bps`: The new fee rate in basis points.
+/// * `_admin`: The AdminCap required to perform this operation.
+public fun update_fee_rate(config: &mut GlobalConfig, new_fee_rate_bps: u64, _admin: &AdminCap) {
+    assert!(new_fee_rate_bps as u128 <= bps(), 1001);
+    config.fee_rate_bps = new_fee_rate_bps;
+}
+
+// === Getters & Helpers ===
+
+public fun checked_package_version(config: &GlobalConfig) {
+    assert!(config.package_version >= VERSION, EInvalidPackageVersion);
+}
+
 /// Get current protocol fee rate
 public fun fee_rate_bps(config: &GlobalConfig): u64 {
     config.fee_rate_bps
+}
+
+public fun max_keeper_fee_bps(): u64 {
+    MAX_KEEPER_FEE_BPS
 }
 
 /// Get current package version

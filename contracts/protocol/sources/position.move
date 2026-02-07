@@ -20,21 +20,13 @@ const DEFAULT_PROJECT_URL: vector<u8> = b"https://bachhd.xyz";
 const DEFAULT_CREATOR: vector<u8> = b"Wyner";
 
 // === Errors ===
-/// Caller is not authorized to perform the action.
 const ENotAuthorized: u64 = 1301;
-/// Version mismatch error (when upgrading).
 const EVersionMismatch: u64 = 1302;
-/// Deposit amount is too small
 const EDepositTooSmall: u64 = 1401;
-/// Exceed maximum cap
 const EExceedMaxCap: u64 = 1402;
-/// Position not found
 const EPositionNotFound: u64 = 1403;
-/// Withdraw shares exceed available shares
 const EInsufficientShares: u64 = 1404;
-/// Position info is empty
 const EPositionInfoEmpty: u64 = 1405;
-/// Gas debt exceed limit
 const EGasDebtExceedLimit: u64 = 1501;
 
 public struct POSITION has drop {}
@@ -125,9 +117,7 @@ public(package) fun new(ctx: &mut TxContext): PositionManager {
     }
 }
 
-public fun pool_id(position: &Position): ID {
-    position.pool_id
-}
+// === Core Operations ===
 
 /// Opens a new position in the sponsor pool.
 /// * `manager`: The PositionManager that manages the positions.
@@ -175,6 +165,12 @@ public(package) fun close_position(manager: &mut PositionManager, position: Posi
 
     manager.positions.remove(position_id);
     destroy(position);
+}
+
+// === Getters ===
+
+public fun pool_id(position: &Position): ID {
+    position.pool_id
 }
 
 /// Increment shares for a position
@@ -235,11 +231,14 @@ public(package) fun decrement_shares(
     position.shares = position.shares - shares;
 }
 
-/// Harvest pending rewards and gas for a position
+// === Harvest & Debt Management ===
+
+/// Calculate pending rewards and gas for a position
 /// * `position`: The Position to harvest from.
 /// * `manager`: The PositionManager managing the position.
 /// * `current_acc_reward_per_share`: The current accumulated reward per share.
 /// * `current_acc_gas_per_share`: The current accumulated gas per share.
+/// Returns `(pending_reward_scaled, pending_gas_scaled)` as (u128, u128)
 public(package) fun harvest(
     position: &Position,
     manager: &mut PositionManager,
@@ -247,24 +246,31 @@ public(package) fun harvest(
     current_acc_gas_per_share: u128,
 ): (u128, u128) {
     let position_id = object::id(position);
-    let info = borrow_mut_position_info(manager, position_id);
+    let position_info = manager.borrow_mut_position_info(position_id);
+    let shares = position_info.shares;
 
-    let accumulated_reward = info.shares * current_acc_reward_per_share;
-    let reward_debt = info.reward_debt_base_asset_amount;
-    let pending_reward = if (accumulated_reward > reward_debt) {
-        accumulated_reward - reward_debt
-    } else { 0 };
+    // Calculate pending reward: (acc_reward_per_share - reward_debt) * shares
+    let total_reward_value = shares * current_acc_reward_per_share;
+    let pending_reward_scaled = if (
+        total_reward_value > position_info.reward_debt_base_asset_amount
+    ) {
+        total_reward_value - position_info.reward_debt_base_asset_amount
+    } else {
+        0
+    };
 
-    let accumulated_gas = info.shares * current_acc_gas_per_share;
-    let gas_debt = info.gas_debt_amount;
-    let pending_gas = if (accumulated_gas > gas_debt) {
-        accumulated_gas - gas_debt
-    } else { 0 };
+    // Calculate pending gas: (acc_gas_per_share - gas_debt) * shares
+    let total_gas_value = shares * current_acc_gas_per_share;
+    let pending_gas_scaled = if (total_gas_value > position_info.gas_debt_amount) {
+        total_gas_value - position_info.gas_debt_amount
+    } else {
+        0
+    };
 
-    info.reward_debt_base_asset_amount = accumulated_reward;
-    info.gas_debt_amount = accumulated_gas;
+    position_info.reward_debt_base_asset_amount = total_reward_value;
+    position_info.gas_debt_amount = total_gas_value;
 
-    (pending_reward, pending_gas)
+    (pending_reward_scaled, pending_gas_scaled)
 }
 
 public(package) fun update_and_reset_reward_debt_base_asset(
@@ -359,6 +365,22 @@ public fun image_url(position: &Position): &String {
     &position.image_url
 }
 
+public fun position_info_position_id(position_info: &PositionInfo): ID {
+    position_info.position_id
+}
+
+public fun position_info_shares(position_info: &PositionInfo): u128 {
+    position_info.shares
+}
+
+public fun position_info_reward_debt_base_asset_amount(position_info: &PositionInfo): u128 {
+    position_info.reward_debt_base_asset_amount
+}
+
+public fun position_info_gas_debt_amount(position_info: &PositionInfo): u128 {
+    position_info.gas_debt_amount
+}
+
 fun borrow_mut_position_info(manager: &mut PositionManager, position_id: ID): &mut PositionInfo {
     assert!(manager.positions.contains(position_id), EPositionNotFound);
     let position_info = manager.positions.borrow_mut(position_id);
@@ -373,18 +395,6 @@ public fun get_position_info(manager: &PositionManager, position_id: ID): &Posit
     assert!(position_info.position_id == position_id, EPositionNotFound);
 
     position_info
-}
-
-public fun gas_debt_amount(position_info: &PositionInfo): u128 {
-    position_info.gas_debt_amount
-}
-
-public fun reward_debt_amount(position_info: &PositionInfo): u128 {
-    position_info.reward_debt_base_asset_amount
-}
-
-public fun position_info_shares(position_info: &PositionInfo): u128 {
-    position_info.shares
 }
 
 fun remove_position_info_for_restore(manager: &mut PositionManager, position_id: ID) {
@@ -433,4 +443,40 @@ fun destroy(position: Position) {
     } = position;
 
     object::delete(id);
+}
+
+// === Testing ===
+#[test_only]
+public fun new_position_info_for_testing(addr: address): PositionInfo {
+    PositionInfo {
+        position_id: object::id_from_address(addr),
+        shares: 0,
+        reward_debt_base_asset_amount: 10000000, // 10 USDC
+        gas_debt_amount: 1000000000, // 1 SUI
+    }
+}
+
+#[test_only]
+public fun new_position_info_custom_for_testing(
+    addr: address,
+    shares: u128,
+    reward_debt: u128,
+    gas_debt: u128,
+): PositionInfo {
+    PositionInfo {
+        position_id: object::id_from_address(addr),
+        shares,
+        reward_debt_base_asset_amount: reward_debt,
+        gas_debt_amount: gas_debt,
+    }
+}
+
+#[test_only]
+public fun positions(manager: &PositionManager): &LinkedTable<ID, PositionInfo> {
+    &manager.positions
+}
+
+#[test_only]
+public fun mut_positions(manager: &mut PositionManager): &mut LinkedTable<ID, PositionInfo> {
+    &mut manager.positions
 }

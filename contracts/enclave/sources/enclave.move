@@ -29,7 +29,7 @@ public struct Pcrs(vector<u8>, vector<u8>, vector<u8>) has copy, drop, store;
 /// * `pcrs`: The PCR measurements of the enclave.
 /// * `capability_id`: The ID of the capability that can update this config.
 /// * `version`: The version of the enclave configuration (incremented when PCRs change).
-public struct EnclaveConfig<phantom T> has key {
+public struct EnclaveConfig<phantom T> has key, store {
     id: UID,
     name: String,
     pcrs: Pcrs,
@@ -42,7 +42,7 @@ public struct EnclaveConfig<phantom T> has key {
 /// * `pubkey`: The public key of the enclave for signature verification.
 /// * `config_version`: Points to the EnclaveConfig's version.
 /// * `owner`: The address of the operator who owns the enclave.
-public struct Enclave<phantom T> has key {
+public struct Enclave<phantom T> has key, store {
     id: UID,
     pubkey: vector<u8>,
     config_version: u64,

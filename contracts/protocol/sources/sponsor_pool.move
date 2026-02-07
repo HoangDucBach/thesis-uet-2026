@@ -1,6 +1,7 @@
 #[allow(unused_const)]
 module protocol::sponsor_pool;
 
+use protocol::config::fee_rate_bps;
 use protocol::position::{Self, PositionManager, Position, PositionInfo};
 use std::string::String;
 use sui::balance::{Self, Balance};
@@ -22,7 +23,7 @@ public struct AdminCap has key, store {
     id: UID,
 }
 
-public struct SponsorCapability has key {
+public struct SponsorCap has key {
     id: UID,
 }
 
@@ -33,9 +34,10 @@ public struct SponsorCapability has key {
 /// * `acc_reward_per_share`: The accumulated reward per share in the sponsor pool.
 /// * `acc_gas_per_share`: The accumulated gas per share in the sponsor pool.
 /// * `position_manager`: The PositionManager that manages the positions in the sponsor pool.
-/// * `keeper_addr`: The address of the keeper for the sponsor pool.
+/// * `fee_rate`: Fee rate of sponsor pool
+/// * `keeper_id`: The ID of the keeper for the sponsor pool.
 /// * `index`: The index of the sponsor pool.
-public struct SponsorPool<phantom RewardCoin> has key {
+public struct SponsorPool<phantom RewardCoin> has key, store {
     id: UID,
     balance: Balance<SUI>,
     reward_balance: Balance<RewardCoin>,
@@ -43,7 +45,8 @@ public struct SponsorPool<phantom RewardCoin> has key {
     acc_reward_per_share: u128,
     acc_gas_per_share: u128,
     position_manager: PositionManager,
-    keeper_addr: address,
+    keeper_id: ID,
+    fee_rate_bps: u64,
     index: u64,
     url: String,
 }
@@ -58,13 +61,14 @@ fun init(otw: SPONSOR_POOL, ctx: &mut TxContext) {
 }
 
 /// Create a new SponsorPool instance
-/// * `keeper_addr`: The address of the keeper for the sponsor pool.
+/// * `keeper_id`: The ID of the keeper for the sponsor pool.
 /// * `url`: The URL associated with the sponsor pool.
 /// * `index`: The index of the sponsor pool.
 /// * `ctx`: The transaction context used to create the SponsorPool.
 public(package) fun new<RewardCoin>(
-    keeper_addr: address,
+    keeper_id: ID,
     url: String,
+    fee_rate_bps: u64,
     index: u64,
     ctx: &mut TxContext,
 ): SponsorPool<RewardCoin> {
@@ -76,7 +80,8 @@ public(package) fun new<RewardCoin>(
         acc_reward_per_share: 0,
         acc_gas_per_share: 0,
         position_manager: position::new(ctx),
-        keeper_addr,
+        fee_rate_bps,
+        keeper_id,
         index,
         url,
     };
@@ -318,10 +323,68 @@ public fun total_shares<RewardCoin>(pool: &SponsorPool<RewardCoin>): u128 {
     pool.total_shares
 }
 
-public fun keeper_addr<RewardCoin>(pool: &SponsorPool<RewardCoin>): address {
-    pool.keeper_addr
+public fun keeper_id<RewardCoin>(pool: &SponsorPool<RewardCoin>): ID {
+    pool.keeper_id
 }
 
 public fun index<RewardCoin>(pool: &SponsorPool<RewardCoin>): u64 {
     pool.index
+}
+
+#[test_only]
+public fun new_for_testing<RewardCoin>(
+    keeper_id: ID,
+    fee_rate_bps: u64,
+    url: String,
+    index: u64,
+    ctx: &mut TxContext,
+): SponsorPool<RewardCoin> {
+    new<RewardCoin>(keeper_id, url, fee_rate_bps, index, ctx)
+}
+
+#[test_only]
+public fun new_sponsor_pool_custom_for_testing<RewardCoin>(
+    keeper_id: ID,
+    fee_rate_bps: u64,
+    url: String,
+    index: u64,
+    initial_sui_balance: u64,
+    initial_reward_balance: u64,
+    total_shares: u128,
+    acc_reward_per_share: u128,
+    acc_gas_per_share: u128,
+    ctx: &mut TxContext,
+): SponsorPool<RewardCoin> {
+    SponsorPool<RewardCoin> {
+        id: object::new(ctx),
+        balance: balance::create_for_testing<SUI>(initial_sui_balance),
+        reward_balance: balance::create_for_testing<RewardCoin>(initial_reward_balance),
+        total_shares,
+        acc_reward_per_share,
+        acc_gas_per_share,
+        position_manager: position::new(ctx),
+        fee_rate_bps,
+        keeper_id,
+        index,
+        url,
+    }
+}
+
+#[test_only]
+public fun balance_for_testing<RewardCoin>(pool: &SponsorPool<RewardCoin>): u64 {
+    balance::value(&pool.balance)
+}
+
+#[test_only]
+public fun reward_balance_for_testing<RewardCoin>(pool: &SponsorPool<RewardCoin>): u64 {
+    balance::value(&pool.reward_balance)
+}
+
+/// Add reward balance to pool (for testing)
+#[test_only]
+public fun add_reward_balance<RewardCoin>(
+    pool: &mut SponsorPool<RewardCoin>,
+    balance: Balance<RewardCoin>,
+) {
+    pool.reward_balance.join(balance);
 }
