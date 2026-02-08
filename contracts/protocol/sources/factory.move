@@ -98,7 +98,14 @@ fun create_sponsor_pool_internal<RewardCoin>(
     assert!(!sponsor_pools.list.contains(pool_key), EKeeperAlreadyHasSponsorPool);
 
     // Create the sponsor pool
-    let pool = sponsor_pool::new<RewardCoin>(keeper_id, url, fee_rate_bps, index, ctx);
+    let pool = sponsor_pool::new<RewardCoin>(
+        keeper_id,
+        url,
+        fee_rate_bps,
+        fee_rate_bps,
+        index,
+        ctx,
+    );
     sponsor_pools.index = sponsor_pools.index + 1;
     let simple_pool = SimpleSponsorPool {
         sponsor_pool_id: object::id(&pool),

@@ -14,7 +14,7 @@ const MAX_KEEPER_FEE_BPS: u64 = 2500; // 25%
 
 // === Roles ===
 const ROLE_ADMIN: u8 = 0; // Full access
-const ROLE_POSITION_MANAGER: u8 = 1; // Manage positions
+const ROLE_CLAIM_PROTOCOL_FEE: u8 = 1; // Claim protocol fees
 const ROLE_GUARDIAN: u8 = 2; // Emergency pause
 const ROLE_FEE_MANAGER: u8 = 3; // Update fee configs
 
@@ -26,7 +26,7 @@ const INTENT_HAVEREST_REWARDS: u8 = 2;
 // === Errors ===
 const EInvalidPackageVersion: u64 = 0001;
 const ENoRoleAdminPermission: u64 = 0002;
-const ENoRoleOperatorPermission: u64 = 0003;
+const ENoRoleClaimProtocolFeePermission: u64 = 0003;
 const ENoRoleKeeperPermission: u64 = 0004;
 const ENoRoleGuardianPermission: u64 = 0005;
 const ENoRoleFeeManagerPermission: u64 = 0006;
@@ -88,8 +88,15 @@ public fun check_role_admin(config: &GlobalConfig, member: address) {
     assert!(acl::has_role(&config.acl, member, ROLE_ADMIN), ENoRoleAdminPermission);
 }
 
-public fun check_role_operator(config: &GlobalConfig, member: address) {
-    assert!(acl::has_role(&config.acl, member, ROLE_POSITION_MANAGER), ENoRoleOperatorPermission);
+public fun check_role_claim_protocol_fee(config: &GlobalConfig, member: address) {
+    assert!(
+        acl::has_role(&config.acl, member, ROLE_CLAIM_PROTOCOL_FEE),
+        ENoRoleClaimProtocolFeePermission,
+    );
+}
+
+public fun check_role_fee_manager(config: &GlobalConfig, member: address) {
+    assert!(acl::has_role(&config.acl, member, ROLE_FEE_MANAGER), ENoRoleFeeManagerPermission);
 }
 
 public fun check_role_guardian(config: &GlobalConfig, member: address) {

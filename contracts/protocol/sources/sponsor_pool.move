@@ -1,7 +1,7 @@
 #[allow(unused_const)]
 module protocol::sponsor_pool;
 
-use protocol::config::fee_rate_bps;
+use protocol::constants::bps;
 use protocol::position::{Self, PositionManager, Position, PositionInfo};
 use std::string::String;
 use sui::balance::{Self, Balance};
@@ -27,14 +27,21 @@ public struct SponsorCap has key {
     id: UID,
 }
 
+/// Capability to collect protocol fees
+public struct ProtocolFeeCollectCap has key, store {
+    id: UID,
+}
+
 /// The SponsorPool struct represents a sponsor pool in the protocol.
 /// * `id`: The unique identifier of the sponsor pool.
 /// * `balance`: The balance of SUI tokens in the sponsor pool.
-/// * `reward_balance`: The balance of reward tokens in the sponsor pool.
+/// * `reward_balance`: The balance of reward tokens in the sponsor pool (includes unclaimed protocol fees).
 /// * `acc_reward_per_share`: The accumulated reward per share in the sponsor pool.
 /// * `acc_gas_per_share`: The accumulated gas per share in the sponsor pool.
 /// * `position_manager`: The PositionManager that manages the positions in the sponsor pool.
-/// * `fee_rate`: Fee rate of sponsor pool
+/// * `protocol_fee_rate_bps`: Protocol fee rate in basis points
+/// * `keeper_fee_rate_bps`: Keeper fee rate in basis points
+/// * `unclaimed_protocol_fee`: Accounting variable - tracks protocol fees collected but not yet claimed
 /// * `keeper_id`: The ID of the keeper for the sponsor pool.
 /// * `index`: The index of the sponsor pool.
 public struct SponsorPool<phantom RewardCoin> has key, store {
@@ -46,7 +53,9 @@ public struct SponsorPool<phantom RewardCoin> has key, store {
     acc_gas_per_share: u128,
     position_manager: PositionManager,
     keeper_id: ID,
-    fee_rate_bps: u64,
+    protocol_fee_rate_bps: u64,
+    keeper_fee_rate_bps: u64,
+    unclaimed_protocol_fee: u64,
     index: u64,
     url: String,
 }
@@ -63,12 +72,15 @@ fun init(otw: SPONSOR_POOL, ctx: &mut TxContext) {
 /// Create a new SponsorPool instance
 /// * `keeper_id`: The ID of the keeper for the sponsor pool.
 /// * `url`: The URL associated with the sponsor pool.
+/// * `protocol_fee_rate_bps`: Protocol fee rate in basis points
+/// * `keeper_fee_rate_bps`: Keeper fee rate in basis points
 /// * `index`: The index of the sponsor pool.
 /// * `ctx`: The transaction context used to create the SponsorPool.
 public(package) fun new<RewardCoin>(
     keeper_id: ID,
     url: String,
-    fee_rate_bps: u64,
+    protocol_fee_rate_bps: u64,
+    keeper_fee_rate_bps: u64,
     index: u64,
     ctx: &mut TxContext,
 ): SponsorPool<RewardCoin> {
@@ -80,7 +92,9 @@ public(package) fun new<RewardCoin>(
         acc_reward_per_share: 0,
         acc_gas_per_share: 0,
         position_manager: position::new(ctx),
-        fee_rate_bps,
+        protocol_fee_rate_bps,
+        keeper_fee_rate_bps,
+        unclaimed_protocol_fee: 0,
         keeper_id,
         index,
         url,
@@ -276,12 +290,61 @@ fun update_pool_accs_internal<RewardCoin>(
     }
 }
 
-public fun update_pool_accs<RewardCoin>(
+public(package) fun update_pool_accs<RewardCoin>(
     pool: &mut SponsorPool<RewardCoin>,
     additional_reward: u128,
     additional_gas: u128,
 ) {
     update_pool_accs_internal(pool, additional_reward, additional_gas);
+}
+
+/// Distribute rewards with automatic fee deduction
+/// This ensures fees are properly accounted before stakers receive rewards
+public(package) fun distribute_rewards<RewardCoin>(
+    pool: &mut SponsorPool<RewardCoin>,
+    gross_reward_amount: u64,
+    keeper_addr: address,
+    ctx: &mut TxContext,
+) {
+    // Calculate fees
+    let gross_value = gross_reward_amount as u128;
+    let protocol_fee_amt = (gross_value * (pool.protocol_fee_rate_bps as u128)) / bps();
+    let keeper_fee_amt = (gross_value * (pool.keeper_fee_rate_bps as u128)) / bps();
+
+    // Pay keeper instantly (if fee > 0)
+    if (keeper_fee_amt > 0) {
+        let keeper_coin = coin::take(&mut pool.reward_balance, (keeper_fee_amt as u64), ctx);
+        transfer::public_transfer(keeper_coin, keeper_addr);
+    };
+
+    // Record protocol fee for lazy collection (if fee > 0)
+    if (protocol_fee_amt > 0) {
+        pool.unclaimed_protocol_fee = pool.unclaimed_protocol_fee + (protocol_fee_amt as u64);
+    };
+
+    // Update accumulators with NET rewards (after deducting both fees)
+    let net_reward_for_stakers = gross_value - keeper_fee_amt - protocol_fee_amt;
+    update_pool_accs_internal(pool, net_reward_for_stakers, 0);
+}
+
+/// Collect accumulated protocol fees (Admin Action)
+/// Only holders of ProtocolFeeCollectCap can call this (similar to Cetus pattern)
+public fun collect_protocol_fee<RewardCoin>(
+    pool: &mut SponsorPool<RewardCoin>,
+    _cap: &ProtocolFeeCollectCap,
+    ctx: &mut TxContext,
+): Coin<RewardCoin> {
+    let amount = pool.unclaimed_protocol_fee;
+    assert!(amount > 0, 0); // ENoProtocolFee
+
+    // Safety check: ensure pool has enough balance
+    assert!(balance::value(&pool.reward_balance) >= amount, 1); // EInsufficientBalance
+
+    // Reset accounting
+    pool.unclaimed_protocol_fee = 0;
+
+    // Take the fee from reward balance
+    coin::take(&mut pool.reward_balance, amount, ctx)
 }
 
 /// Add SUI balance to pool
@@ -331,21 +394,27 @@ public fun index<RewardCoin>(pool: &SponsorPool<RewardCoin>): u64 {
     pool.index
 }
 
+public fun unclaimed_protocol_fee<RewardCoin>(pool: &SponsorPool<RewardCoin>): u64 {
+    pool.unclaimed_protocol_fee
+}
+
 #[test_only]
 public fun new_for_testing<RewardCoin>(
     keeper_id: ID,
-    fee_rate_bps: u64,
+    protocol_fee_rate_bps: u64,
+    keeper_fee_rate_bps: u64,
     url: String,
     index: u64,
     ctx: &mut TxContext,
 ): SponsorPool<RewardCoin> {
-    new<RewardCoin>(keeper_id, url, fee_rate_bps, index, ctx)
+    new<RewardCoin>(keeper_id, url, protocol_fee_rate_bps, keeper_fee_rate_bps, index, ctx)
 }
 
 #[test_only]
 public fun new_sponsor_pool_custom_for_testing<RewardCoin>(
     keeper_id: ID,
-    fee_rate_bps: u64,
+    protocol_fee_rate_bps: u64,
+    keeper_fee_rate_bps: u64,
     url: String,
     index: u64,
     initial_sui_balance: u64,
@@ -363,7 +432,9 @@ public fun new_sponsor_pool_custom_for_testing<RewardCoin>(
         acc_reward_per_share,
         acc_gas_per_share,
         position_manager: position::new(ctx),
-        fee_rate_bps,
+        protocol_fee_rate_bps,
+        keeper_fee_rate_bps,
+        unclaimed_protocol_fee: 0,
         keeper_id,
         index,
         url,

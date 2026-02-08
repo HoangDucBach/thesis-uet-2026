@@ -1,44 +1,43 @@
-/// The position_tests module provides comprehensive test coverage for the position management system,
-/// which is core to the sponsor pool protocol. This module tests the complete lifecycle of user positions
+/// Position Management Test Suite - Core Staking & Security
 ///
-/// ## Core Concepts Tested:
+/// Tests the position lifecycle and MasterChef-style reward distribution system.
 ///
-/// ### Position Lifecycle:
-/// - `test_open_position`: Verifies position creation with proper initialization
-/// - `test_close_position`: Ensures positions can be properly closed and cleaned up
+/// ## Reward Distribution Mechanism:
+/// Uses accumulated per-share accounting:
+/// - `acc_reward_per_share`: Accumulated reward per share (scaled by 1e12)
+/// - `reward_debt`: Position's "entry price" in reward distribution
+/// - `pending_reward = (shares × acc_reward_per_share) - reward_debt`
+///
+/// ## Test Coverage:
+///
+/// ### Basic Position Operations:
+/// - `test_open_position`: Position creation
+/// - `test_close_position`: Position cleanup
+/// - `test_stake_and_increment_shares`: Basic staking
+/// - `test_unstake_reduces_shares`: Basic unstaking
+/// - `test_stake_zero_amount_fails`: Input validation (security)
 ///
 /// ### Staking Mechanics:
-/// - `test_stake_and_increment_shares`: Single stake operation increases shares correctly
-/// - `test_multiple_stakes_accumulate`: Multiple stake calls accumulate shares as expected
-/// - `test_unstake_reduces_shares`: Unstaking removes shares and returns staked amount
+/// - `test_multiple_stakes_accumulate`: Multiple stakes accumulate shares
+/// - `test_multiple_users_stake`: Multi-user scenarios
 ///
-/// ### Reward Distribution:
-/// The reward system follows a Masterchef-style accumulated per-share mechanism:
-/// - `acc_reward_per_share`: Accumulated reward tokens per share (scaled by acc_precision() = 1e12)
-/// - `reward_debt`: Position's "purchase price" in reward distribution
-/// - `pending_reward = (position.shares × current_acc) - position.reward_debt`
-/// - The reward debt is automatically updated on deposit/withdrawal to track the right amount
+/// ### Economic Fairness:
+/// - `test_proportional_reward_distribution`: **Proportional rewards based on shares**
+/// - `test_late_entry`: **Anti-dilution - late stakers don't claim old rewards**
+/// - `test_reward_after_additional_stake`: Rewards adjust correctly after new stakes
+/// - `test_stake_harvest_then_stake_again`: Harvest + re-stake flow
 ///
-/// - `test_reward_distribution`: Single user receives all reward tokens proportionally
-/// - `test_proportional_reward_distribution`: Multiple users receive rewards proportional to their shares
-/// - `test_reward_after_additional_stake`: Additional stakes correct reward calculation
-/// - `test_stake_harvest_then_stake_again`: Harvest followed by additional stake calculates rewards correctly
-/// - `test_withdraw_rewards`: Users can claim accumulated reward tokens
+/// ### Reward & Gas Claims:
+/// - `test_reward_distribution`: Basic reward claiming
+/// - `test_withdraw_rewards`: Withdraw accumulated rewards
+/// - `test_withdraw_gas`: Withdraw gas reimbursement
+/// - `test_gas_debt_tracking`: Gas accumulator tracking
 ///
-/// ### Gas Tracking:
-/// Similar to reward accumulation, gas costs are tracked per position:
-/// - `test_gas_debt_tracking`: Gas costs accumulate correctly per share
-/// - `test_gas_cost_exceeds_principal`: When gas debt exceeds principal, user receives zero
-/// - `test_withdraw_gas`: Users can claim accumulated gas reimbursement
+/// ### Security & Edge Cases:
+/// - `test_cannot_unstake_more_than_balance`: **Prevent over-withdrawal**
+/// - `test_cannot_use_position_in_wrong_pool`: **Access control across pools**
+/// - `test_gas_cost_exceeds_principal`: **Edge case: gas debt > principal**
 ///
-/// ### Security & Anti-Dilution:
-/// - `test_late_entry`: Late users cannot claim rewards accumulated before their entry
-/// - `test_cannot_unstake_more_than_balance`: Validates proper balance checking on unstake
-/// - `test_cannot_use_position_in_wrong_pool`: Ensures positions cannot be misused across different pools
-///
-/// ### Edge Cases:
-/// - `test_multiple_users_stake`: Multiple users in same pool maintain correct total shares
-/// - `test_stake_zero_amount_fails`: Zero stake attempts fail as expected
 
 #[test_only]
 module protocol::position_tests;
@@ -59,7 +58,8 @@ const USER_2: address = @0x2222;
 const KEEPER_ID: address = @0x3333;
 
 const POOL_INDEX: u64 = 1;
-const FEE_RATE_BPS: u64 = 500; // 5%
+const PROTOCOL_FEE_RATE_BPS: u64 = 5; // 0.05%
+const KEEPER_FEE_RATE_BPS: u64 = 30; // 0.3%
 
 // === Test Helpers ===
 
@@ -68,7 +68,8 @@ fun setup_pool(scenario: &mut Scenario): ID {
     {
         let pool = sponsor_pool::new_for_testing<REWARD>(
             object::id_from_address(KEEPER_ID),
-            FEE_RATE_BPS,
+            PROTOCOL_FEE_RATE_BPS,
+            KEEPER_FEE_RATE_BPS,
             string::utf8(b"https://test.com/image.png"),
             POOL_INDEX,
             ts::ctx(scenario),
@@ -730,7 +731,8 @@ fun test_cannot_use_position_in_wrong_pool() {
     {
         let pool2 = sponsor_pool::new_for_testing<REWARD>(
             object::id_from_address(KEEPER_ID),
-            FEE_RATE_BPS,
+            PROTOCOL_FEE_RATE_BPS,
+            KEEPER_FEE_RATE_BPS,
             string::utf8(b"https://test.com/image2.png"),
             2,
             ts::ctx(&mut scenario),
