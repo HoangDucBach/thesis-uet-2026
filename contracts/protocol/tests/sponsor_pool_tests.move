@@ -387,7 +387,7 @@ fun test_fee_distribution_with_custom_fee() {
 
     create_and_stake_position(&mut scenario, USER_1, 100000);
 
-    // Step 1: Add gross rewards and distribute with fees
+    // 1: Add gross rewards and distribute with fees
     ts::next_tx(&mut scenario, ADMIN);
     {
         let mut pool = ts::take_shared<SponsorPool<REWARD>>(&scenario);
@@ -397,14 +397,6 @@ fun test_fee_distribution_with_custom_fee() {
         let reward_coin = coin::mint_for_testing<REWARD>(gross_reward, ts::ctx(&mut scenario));
         let reward_balance = coin::into_balance(reward_coin);
         sponsor_pool::add_reward_balance(&mut pool, reward_balance);
-
-        // Distribute rewards with automatic fee deduction
-        sponsor_pool::distribute_rewards(
-            &mut pool,
-            gross_reward,
-            KEEPER_ID,
-            ts::ctx(&mut scenario),
-        );
 
         // Calculate expected values
         let protocol_fee = (gross_reward as u128 * (PROTOCOL_FEE_RATE_BPS as u128)) / 10000; // 50
@@ -419,14 +411,17 @@ fun test_fee_distribution_with_custom_fee() {
         // Verify protocol fee recorded (50)
         assert!(sponsor_pool::unclaimed_protocol_fee(&pool) == (protocol_fee as u64), 1);
 
-        // Verify pool balance: 100000 - 300 (keeper) = 99700
-        let expected_pool_balance = gross_reward - (keeper_fee as u64);
-        assert!(sponsor_pool::reward_balance_for_testing(&pool) == expected_pool_balance, 2);
+        // Verify keeper fee recorded (300)
+        assert!(sponsor_pool::unclaimed_keeper_fee(&pool) == (keeper_fee as u64), 2);
+
+        // Verify pool balance: 100000 (all fees use lazy collection now)
+        let expected_pool_balance = gross_reward;
+        assert!(sponsor_pool::reward_balance_for_testing(&pool) == expected_pool_balance, 3);
 
         ts::return_shared(pool);
     };
 
-    // Step 2: User withdraws rewards (should get 99,650, not 100,000)
+    // 2: User withdraws rewards (should get 99,650, not 100,000)
     ts::next_tx(&mut scenario, USER_1);
     {
         let mut pool = ts::take_shared<SponsorPool<REWARD>>(&scenario);
@@ -444,25 +439,16 @@ fun test_fee_distribution_with_custom_fee() {
         ts::return_shared(pool);
     };
 
-    // Step 3: Verify keeper received fee (check transaction effects)
-    ts::next_tx(&mut scenario, KEEPER_ID);
-    {
-        // Keeper should have received 300 REWARD via instant transfer (0.3% of 100k)
-        let keeper_coin = ts::take_from_sender<Coin<REWARD>>(&scenario);
-        let expected_keeper_fee = (100000 * KEEPER_FEE_RATE_BPS) / 10000;
-        assert!(coin::value(&keeper_coin) == expected_keeper_fee, 4);
-        ts::return_to_sender(&scenario, keeper_coin);
-    };
-
-    // Step 4: Protocol collects fee
+    // 3: Verify keeper fee is recorded (lazy collection)
     ts::next_tx(&mut scenario, ADMIN);
     {
-        let mut pool = ts::take_shared<SponsorPool<REWARD>>(&scenario);
+        let pool = ts::take_shared<SponsorPool<REWARD>>(&scenario);
 
-        // Admin collects protocol fee (need ProtocolFeeCollectCap - skip for now)
-        // In production: collect_protocol_fee(&mut pool, &cap, ctx)
+        // Keeper fee should be recorded for lazy collection (300 REWARD = 0.3% of 100k)
+        let expected_keeper_fee = (100000 * KEEPER_FEE_RATE_BPS) / 10000;
+        assert!(sponsor_pool::unclaimed_keeper_fee(&pool) == expected_keeper_fee, 4);
 
-        // Verify unclaimed fee still recorded (50 REWARD = 0.05% of 100k)
+        // Verify unclaimed protocol fee still recorded (50 REWARD = 0.05% of 100k)
         let expected_protocol_fee = (100000 * PROTOCOL_FEE_RATE_BPS) / 10000;
         assert!(sponsor_pool::unclaimed_protocol_fee(&pool) == expected_protocol_fee, 5);
 
