@@ -61,21 +61,6 @@ public struct PositionInfo has copy, drop, store {
     gas_debt_amount: u128,
 }
 
-fun init(otw: POSITION, ctx: &mut TxContext) {
-    let publisher = package::claim(otw, ctx);
-
-    update_display_internal(
-        &publisher,
-        utf8(DEFAULT_DESCRIPTION),
-        utf8(DEFAULT_LINK),
-        utf8(DEFAULT_PROJECT_URL),
-        utf8(DEFAULT_CREATOR),
-        ctx,
-    );
-    transfer::public_transfer(publisher, ctx.sender());
-}
-
-#[allow(lint(self_transfer))]
 fun update_display_internal(
     publisher: &Publisher,
     description: String,
@@ -110,6 +95,22 @@ fun update_display_internal(
     transfer::public_transfer(display, ctx.sender());
 }
 
+fun init(otw: POSITION, ctx: &mut TxContext) {
+    let publisher = package::claim(otw, ctx);
+
+    update_display_internal(
+        &publisher,
+        utf8(DEFAULT_DESCRIPTION),
+        utf8(DEFAULT_LINK),
+        utf8(DEFAULT_PROJECT_URL),
+        utf8(DEFAULT_CREATOR),
+        ctx,
+    );
+    transfer::public_transfer(publisher, ctx.sender());
+}
+
+// === Package-Private Functions ===
+
 public(package) fun new(ctx: &mut TxContext): PositionManager {
     PositionManager {
         positions: linked_table::new<ID, PositionInfo>(ctx),
@@ -117,14 +118,6 @@ public(package) fun new(ctx: &mut TxContext): PositionManager {
     }
 }
 
-// === Core Operations ===
-
-/// Opens a new position in the sponsor pool.
-/// * `manager`: The PositionManager that manages the positions.
-/// * `pool_id`: The identifier of the sponsor pool.
-/// * `shares`: The number of shares to allocate to the new position.
-/// * `ctx`: The transaction context.
-/// * Returns the newly created Position.
 public(package) fun open_position(
     manager: &mut PositionManager,
     pool_id: ID,
@@ -157,9 +150,6 @@ public(package) fun open_position(
     position
 }
 
-/// Closes an existing position in the sponsor pool.
-/// * `manager`: The PositionManager that manages the positions.
-/// * `position`: The Position to be closed.
 public(package) fun close_position(manager: &mut PositionManager, position: Position) {
     let position_id = object::id(&position);
 
@@ -167,18 +157,6 @@ public(package) fun close_position(manager: &mut PositionManager, position: Posi
     destroy(position);
 }
 
-// === Getters ===
-
-public fun pool_id(position: &Position): ID {
-    position.pool_id
-}
-
-/// Increment shares for a position
-/// * `position`: The Position to update.
-/// * `manager`: The PositionManager managing the position.
-/// * `shares`: The number of shares to increment.
-/// * `current_acc_reward_per_share`: The current accumulated reward per share.
-/// * `current_acc_gas_per_share`: The current accumulated gas per share.
 public(package) fun increment_shares(
     position: &mut Position,
     manager: &mut PositionManager,
@@ -201,12 +179,6 @@ public(package) fun increment_shares(
     position.shares = position.shares + shares;
 }
 
-/// Decrement shares for a position
-/// * `position`: The Position to update.
-/// * `manager`: The PositionManager managing the position.
-/// * `shares`: The number of shares to decrement.
-/// * `current_acc_reward_per_share`: The current accumulated reward per share.
-/// * `current_acc_gas_per_share`: The current accumulated gas per share.
 public(package) fun decrement_shares(
     position: &mut Position,
     manager: &mut PositionManager,
@@ -231,14 +203,6 @@ public(package) fun decrement_shares(
     position.shares = position.shares - shares;
 }
 
-// === Harvest & Debt Management ===
-
-/// Calculate pending rewards and gas for a position
-/// * `position`: The Position to harvest from.
-/// * `manager`: The PositionManager managing the position.
-/// * `current_acc_reward_per_share`: The current accumulated reward per share.
-/// * `current_acc_gas_per_share`: The current accumulated gas per share.
-/// Returns `(pending_reward_scaled, pending_gas_scaled)` as (u128, u128)
 public(package) fun harvest(
     position: &Position,
     manager: &mut PositionManager,
@@ -319,6 +283,8 @@ public(package) fun reset_gas_debt(manager: &mut PositionManager, position_id: I
     debt
 }
 
+// === Public Functions ===
+
 public fun fetch_positions(
     manager: &PositionManager,
     start: vector<ID>,
@@ -347,6 +313,20 @@ public fun fetch_positions(
     };
 
     results
+}
+
+public fun get_position_info(manager: &PositionManager, position_id: ID): &PositionInfo {
+    assert!(manager.positions.contains(position_id), EPositionNotFound);
+    let position_info = manager.positions.borrow(position_id);
+    assert!(position_info.position_id == position_id, EPositionNotFound);
+
+    position_info
+}
+
+// === Getters ===
+
+public fun pool_id(position: &Position): ID {
+    position.pool_id
 }
 
 public fun shares(position: &Position): u128 {
@@ -381,17 +361,11 @@ public fun position_info_gas_debt_amount(position_info: &PositionInfo): u128 {
     position_info.gas_debt_amount
 }
 
+// === Internal Functions ===
+
 fun borrow_mut_position_info(manager: &mut PositionManager, position_id: ID): &mut PositionInfo {
     assert!(manager.positions.contains(position_id), EPositionNotFound);
     let position_info = manager.positions.borrow_mut(position_id);
-    assert!(position_info.position_id == position_id, EPositionNotFound);
-
-    position_info
-}
-
-public fun get_position_info(manager: &PositionManager, position_id: ID): &PositionInfo {
-    assert!(manager.positions.contains(position_id), EPositionNotFound);
-    let position_info = manager.positions.borrow(position_id);
     assert!(position_info.position_id == position_id, EPositionNotFound);
 
     position_info

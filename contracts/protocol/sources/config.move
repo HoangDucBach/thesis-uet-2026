@@ -177,3 +177,17 @@ public fun is_emergency_paused(config: &GlobalConfig): bool {
 public fun acl(config: &GlobalConfig): &acl::ACL {
     &config.acl
 }
+
+// === Test Only Functions ===
+
+#[test_only]
+public fun new_for_testing(ctx: &mut TxContext): (AdminCap, GlobalConfig) {
+    let admin_cap = AdminCap { id: object::new(ctx) };
+    let global_config = GlobalConfig {
+        id: object::new(ctx),
+        fee_rate_bps: DEFAULT_PROTOCOL_FEE_BPS,
+        acl: acl::new(ctx),
+        package_version: VERSION,
+    };
+    (admin_cap, global_config)
+}

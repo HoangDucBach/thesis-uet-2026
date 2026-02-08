@@ -3,7 +3,6 @@ module protocol::factory;
 use enclave::enclave::{Self, Enclave, EnclaveConfig, EnclaveCap};
 use protocol::config::{Self, GlobalConfig, checked_package_version};
 use protocol::keeper::{Self, Keeper, KeeperWitness};
-use protocol::position::{Self, Position, PositionInfo};
 use protocol::sponsor_pool::{Self, SponsorPool};
 use std::string::String;
 use sui::linked_table::{Self, LinkedTable};
@@ -34,6 +33,8 @@ fun init(ctx: &mut TxContext) {
 
     transfer::public_share_object(sponsor_pools);
 }
+
+// === Public Entry Functions ===
 
 #[allow(lint(self_transfer))]
 public fun create_enclave_and_keeper(
@@ -82,6 +83,8 @@ entry fun create_sponsor_pool<RewardCoin>(
 
     transfer::public_share_object(sponsor_pool);
 }
+
+// === Internal Functions ===
 
 fun create_sponsor_pool_internal<RewardCoin>(
     sponsor_pools: &mut SponsorPools,
@@ -137,12 +140,20 @@ fun create_keeper_internal(
     let enclave_config_id = object::id(&enclave_config);
     let enclave_id = object::id(&enclave);
 
+    // Create KeeperCap first to get its ID
+    let keeper_cap = keeper::new_keeper_cap(ctx);
+    let cap_id = object::id(&keeper_cap);
+
     let keeper = keeper::new(
         name,
         ctx.sender(),
         enclave_id,
+        cap_id,
         ctx,
     );
+
+    // Transfer cap to keeper operator
+    transfer::public_transfer(keeper_cap, ctx.sender());
 
     (keeper, enclave_config, enclave, enclave_cap)
 }

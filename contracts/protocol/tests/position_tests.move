@@ -494,10 +494,7 @@ fun test_withdraw_rewards() {
     // Stake 1000 SUI
     stake_to_position(&mut scenario, USER_1, 1000);
 
-    // Add 500 rewards (update accs)
-    add_rewards_to_pool(&mut scenario, 500, 0);
-
-    // Add actual reward balance to pool
+    // Add 500 rewards to pool (this will deduct fees automatically)
     add_actual_reward_balance(&mut scenario, 500);
 
     // Withdraw rewards
@@ -508,8 +505,10 @@ fun test_withdraw_rewards() {
 
         let reward_balance = pool.withdraw_rewards(&mut position);
 
-        // Should receive 500 rewards
-        assert!(balance::value(&reward_balance) == 500, 0);
+        // Should receive net rewards after fees (500 - keeper_fee - protocol_fee)
+        // Keeper: 500 * 30 / 10000 = 1, Protocol: 500 * 5 / 10000 = 0
+        // Net: 500 - 1 - 0 = 499
+        assert!(balance::value(&reward_balance) == 499, 0);
 
         balance::destroy_for_testing(reward_balance);
         ts::return_to_sender(&scenario, position);
@@ -559,10 +558,9 @@ fun test_stake_harvest_then_stake_again() {
     // === Phase 1: Initial stake ===
     stake_to_position(&mut scenario, USER_1, 1000);
 
-    // Add 1000 rewards on 1000 shares
-    add_rewards_to_pool(&mut scenario, 1000, 0);
-
-    // Add actual reward balance for withdrawal
+    // Add 1000 rewards (fees will be deducted)
+    // Keeper: 1000 * 30 / 10000 = 3, Protocol: 1000 * 5 / 10000 = 0
+    // Net: 1000 - 3 - 0 = 997
     add_actual_reward_balance(&mut scenario, 1000);
 
     // Harvest first round of rewards
@@ -573,7 +571,7 @@ fun test_stake_harvest_then_stake_again() {
 
         // Withdraw the rewards (this calls harvest internally)
         let reward_balance = pool.withdraw_rewards(&mut position);
-        assert!(balance::value(&reward_balance) == 1000, 0);
+        assert!(balance::value(&reward_balance) == 997, 0);
 
         balance::destroy_for_testing(reward_balance);
         ts::return_to_sender(&scenario, position);
@@ -584,9 +582,10 @@ fun test_stake_harvest_then_stake_again() {
     stake_to_position(&mut scenario, USER_1, 500);
 
     // Add more rewards: 1500 on total 1500 shares
-    add_rewards_to_pool(&mut scenario, 1500, 0);
-
-    // Add actual reward balance for next withdrawal
+    // Keeper: 1500 * 30 / 10000 = 4 (truncated), Protocol: 1500 * 5 / 10000 = 0 (truncated)
+    // Net: 1500 - 4 - 0 = 1496
+    // But due to precision loss in accumulator: (1496 * 1e12) / 1500 = 997333333333
+    // Actual reward: (997333333333 * 1500) / 1e12 = 1495
     add_actual_reward_balance(&mut scenario, 1500);
 
     // Check second pending reward
@@ -600,7 +599,8 @@ fun test_stake_harvest_then_stake_again() {
 
         // Withdraw second batch (harvest is called internally)
         let reward_balance = pool.withdraw_rewards(&mut position);
-        assert!(balance::value(&reward_balance) == 1500, 2);
+        // Actual reward is 1495 due to accumulator precision loss
+        assert!(balance::value(&reward_balance) == 1495, 2);
 
         balance::destroy_for_testing(reward_balance);
         ts::return_to_sender(&scenario, position);
