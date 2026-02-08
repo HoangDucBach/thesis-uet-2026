@@ -3,6 +3,7 @@
 module protocol::keeper;
 
 use enclave::enclave::{Self, Enclave, EnclaveCap, EnclaveConfig};
+use protocol::config::{Self, GlobalConfig};
 use std::string::String;
 use sui::nitro_attestation::NitroAttestationDocument;
 use sui::package;
@@ -10,7 +11,7 @@ use sui::package;
 // === OTW ===
 public struct KEEPER has drop {}
 
-// === Witness for Enclave Cap ===
+// === Witness ===
 public struct KeeperWitness has drop {}
 
 // === Constants ===
@@ -47,6 +48,7 @@ public struct Keeper has key, store {
     operator: address,
     name: String,
     enclave_id: ID,
+    capability_id: ID,
     status: u8,
     stats: Stats,
 }
@@ -55,7 +57,7 @@ public struct Keeper has key, store {
 /// * `total_liquidations`: Total liquidations attempted
 /// * `successful_liquidations`: Successful liquidations
 /// * `failed_liquidations`: Failed liquidations
-/// * `total_profit`: Total profit generated (in base units)
+/// * `total_profit`: Total profit generated
 /// * `total_gas_used`: Total gas consumed
 /// * `last_active_at`: Last active timestamp
 public struct Stats has copy, drop, store {
@@ -67,9 +69,8 @@ public struct Stats has copy, drop, store {
     last_active_at: u64,
 }
 
-public struct KeeperCap has key {
+public struct KeeperCap has key, store {
     id: UID,
-    keeper_id: ID,
 }
 
 // === Events ===
@@ -81,16 +82,20 @@ fun init(otw: KEEPER, ctx: &mut TxContext) {
     transfer::public_transfer(publisher, sender);
 }
 
+// === Constructors ===
+
 public(package) fun new(
     name: String,
     operator: address,
     enclave_id: ID,
+    capability_id: ID,
     ctx: &mut TxContext,
 ): Keeper {
     Keeper {
         id: object::new(ctx),
         operator,
         enclave_id,
+        capability_id,
         name,
         status: STATUS_PENDING,
         stats: Stats {
@@ -104,13 +109,14 @@ public(package) fun new(
     }
 }
 
-/// Utility function to create enclave config, enclave, and capability for keeper
-/// * `name`: A human-readable name for the enclave configuration.
-/// * `pcr0`: The expected PCR0 value for the enclave.
-/// * `pcr1`: The expected PCR1 value for the enclave.
-/// * `pcr2`: The expected PCR2 value for the enclave.
-/// * `document`: The Nitro attestation document.
-/// * `ctx`: Transaction context.
+public(package) fun new_keeper_cap(ctx: &mut TxContext): KeeperCap {
+    KeeperCap {
+        id: object::new(ctx),
+    }
+}
+
+// === Public Functions ===
+
 public fun create_enclave_with_config_and_cap(
     name: String,
     pcr0: vector<u8>,
@@ -133,26 +139,6 @@ public fun create_enclave_with_config_and_cap(
     (enclave_config, enclave, enclave_cap)
 }
 
-/// Suspend keeper
-/// * `keeper`: The mutable reference to the Keeper.
-public(package) fun suspend_keeper(keeper: &mut Keeper) {
-    assert!(keeper.status == STATUS_ACTIVE, EInvalidStatus);
-    keeper.status = STATUS_SUSPENDED;
-}
-
-/// Reactivate keeper
-/// * `keeper`: The mutable reference to the Keeper.
-public(package) fun reactivate_keeper(keeper: &mut Keeper) {
-    assert!(keeper.status == STATUS_SUSPENDED, EInvalidStatus);
-    keeper.status = STATUS_ACTIVE;
-}
-
-/// Update keeper statistics after liquidation
-/// * `keeper`: The mutable reference to the Keeper.
-/// * `cap`: The KeeperCap required to perform this operation.
-/// * `success`: Whether the liquidation was successful.
-/// * `profit`: The profit generated (0 if failed).
-/// * `gas_used`: The gas consumed.
 public fun update_stats(
     keeper: &mut Keeper,
     cap: &KeeperCap,
@@ -161,7 +147,7 @@ public fun update_stats(
     gas_used: u128,
     timestamp: u64,
 ) {
-    assert!(object::id(keeper) == cap.keeper_id, EKeeperCapNotMatch);
+    assert!(object::id(cap) == keeper.capability_id, EKeeperCapNotMatch);
 
     keeper.stats.total_liquidations = keeper.stats.total_liquidations + 1;
     if (success) {
@@ -174,14 +160,48 @@ public fun update_stats(
     keeper.stats.last_active_at = timestamp;
 }
 
-/// Update keeper's name
-/// * `keeper`: The mutable reference to the Keeper.
-/// * `cap`: The KeeperCap required to perform this operation.
-/// * `new_name`: The new name for the keeper.
 public fun update_name(keeper: &mut Keeper, cap: &KeeperCap, new_name: String) {
-    assert!(object::id(keeper) == cap.keeper_id, EKeeperCapNotMatch);
+    assert!(object::id(cap) == keeper.capability_id, EKeeperCapNotMatch);
 
     keeper.name = new_name;
+}
+
+public fun verify_cap(keeper: &Keeper, cap: &KeeperCap) {
+    assert!(object::id(cap) == keeper.capability_id, EKeeperCapNotMatch);
+}
+
+// === Admin Functions ===
+
+public fun admin_activate_keeper(config: &GlobalConfig, keeper: &mut Keeper, ctx: &TxContext) {
+    config::check_role_admin(config, ctx.sender());
+    activate_keeper(keeper);
+}
+
+public fun admin_suspend_keeper(config: &GlobalConfig, keeper: &mut Keeper, ctx: &TxContext) {
+    config::check_role_admin(config, ctx.sender());
+    suspend_keeper(keeper);
+}
+
+public fun admin_reactivate_keeper(config: &GlobalConfig, keeper: &mut Keeper, ctx: &TxContext) {
+    config::check_role_admin(config, ctx.sender());
+    reactivate_keeper(keeper);
+}
+
+// === Package-Private Functions ===
+
+public(package) fun activate_keeper(keeper: &mut Keeper) {
+    assert!(keeper.status == STATUS_PENDING, EInvalidStatus);
+    keeper.status = STATUS_ACTIVE;
+}
+
+public(package) fun suspend_keeper(keeper: &mut Keeper) {
+    assert!(keeper.status == STATUS_ACTIVE, EInvalidStatus);
+    keeper.status = STATUS_SUSPENDED;
+}
+
+public(package) fun reactivate_keeper(keeper: &mut Keeper) {
+    assert!(keeper.status == STATUS_SUSPENDED, EInvalidStatus);
+    keeper.status = STATUS_ACTIVE;
 }
 
 // === Getters ===
@@ -206,4 +226,49 @@ public fun name(keeper: &Keeper): String {
 /// * `keeper`: The Keeper to check.
 public fun is_active(keeper: &Keeper): bool {
     keeper.status == STATUS_ACTIVE
+}
+
+/// Check if keeper is pending
+/// * `keeper`: The Keeper to check.
+public fun is_pending(keeper: &Keeper): bool {
+    keeper.status == STATUS_PENDING
+}
+
+/// Check if keeper is suspended
+/// * `keeper`: The Keeper to check.
+public fun is_suspended(keeper: &Keeper): bool {
+    keeper.status == STATUS_SUSPENDED
+}
+
+// === Test Helpers ===
+
+#[test_only]
+public fun create_keeper_for_testing(
+    operator: address,
+    name: String,
+    ctx: &mut TxContext,
+): (Keeper, KeeperCap) {
+    let cap = KeeperCap {
+        id: object::new(ctx),
+    };
+    let cap_id = object::id(&cap);
+
+    let keeper = Keeper {
+        id: object::new(ctx),
+        operator,
+        name,
+        enclave_id: object::id_from_address(@0x0),
+        capability_id: cap_id,
+        status: STATUS_ACTIVE,
+        stats: Stats {
+            total_liquidations: 0,
+            successful_liquidations: 0,
+            failed_liquidations: 0,
+            total_profit: 0,
+            total_gas_used: 0,
+            last_active_at: 0,
+        },
+    };
+
+    (keeper, cap)
 }
